@@ -9,6 +9,7 @@ let cart = JSON.parse(localStorage.getItem('deserve_cart')) || [];
 let activeFilter = 'all';
 let currentPage = 'home';
 let searchQuery = '';
+let adminTab = 'products'; // 'products' or 'orders'
 
 // ========== HELPERS ==========
 function saveProducts() { localStorage.setItem('deserve_products', JSON.stringify(products)); }
@@ -20,15 +21,12 @@ function showToast(msg) {
   setTimeout(() => toast.remove(), 2500);
 }
 
-// ========== ADMIN REVEAL (double-click logo or URL param) ==========
+// ========== ADMIN REVEAL ==========
 function revealAdmin() {
-  const adminLink = document.getElementById('adminNavLink');
-  adminLink.classList.add('visible');
+  document.getElementById('adminNavLink').classList.add('visible');
   showToast('🔐 Admin link revealed');
 }
-// On page load, check for ?admin in URL
 if(window.location.search.includes('admin')) revealAdmin();
-// Also allow double-click on logo
 document.addEventListener('DOMContentLoaded', () => {
   const logo = document.getElementById('navLogo');
   if(logo) logo.addEventListener('dblclick', revealAdmin);
@@ -44,10 +42,14 @@ function showPage(pageName) {
   if(pageName === 'home') renderFeatured();
   if(pageName === 'shop') renderShop();
   if(pageName === 'cart') renderCart();
-  if(pageName === 'admin') { renderAdminProducts(); updateAdminStats(); }
+  if(pageName === 'admin') { 
+    renderAdminProducts(); 
+    renderAdminOrders(); 
+    updateAdminStats(); 
+  }
 }
 
-// ========== PRODUCT RENDERING ==========
+// ========== PRODUCT RENDERING (unchanged) ==========
 function buildProductCard(p) {
   let imgHtml = p.img ? `<img src="${p.img}" class="uploaded-img" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; z-index:1;" />` : '';
   return `<div class="product-card" data-id="${p.id}">
@@ -151,9 +153,20 @@ function placeOrder() {
   if(!first || !last || !email || !phone || !addr) return showToast('Please fill all fields');
   const payment = document.querySelector('input[name="payment"]:checked')?.value;
   const total = getCartTotal() + 80;
-  const order = { id:Date.now(), customer:`${first} ${last}`, email, phone, address:addr, items:[...cart], total, payment, date:new Date() };
+  const order = { 
+    id: Date.now(), 
+    customer: `${first} ${last}`, 
+    email, phone, 
+    address: addr, 
+    items: cart.map(i => ({ name: i.name, price: i.price, qty: i.qty, emoji: i.emoji })), 
+    total, 
+    payment, 
+    date: new Date().toISOString(),
+    status: 'Pending' // default
+  };
   let orders = JSON.parse(localStorage.getItem('deserve_orders') || '[]');
-  orders.push(order); localStorage.setItem('deserve_orders', JSON.stringify(orders));
+  orders.push(order); 
+  localStorage.setItem('deserve_orders', JSON.stringify(orders));
   if(payment === 'whatsapp') {
     let msg = `Hi DESERVE! Order from ${first} ${last}\nItems: ${cart.map(i=>`${i.name} x${i.qty}`).join(', ')}\nTotal: R${total}\nAddress: ${addr}`;
     window.open(`https://wa.me/27687975725?text=${encodeURIComponent(msg)}`, '_blank');
@@ -165,15 +178,19 @@ function placeOrder() {
 }
 function closeModal() { document.getElementById('orderModal').classList.remove('active'); showPage('home'); }
 
-// ========== ADMIN (with image upload) ==========
+// ========== ADMIN LOGIN & PANEL ==========
 function adminLogin() {
   let pw = document.getElementById('adminPassword').value;
   if(pw === 'deserve2024') {
     document.getElementById('adminLogin').style.display = 'none';
     document.getElementById('adminPanel').style.display = 'block';
-    renderAdminProducts(); updateAdminStats();
+    renderAdminProducts(); 
+    renderAdminOrders(); 
+    updateAdminStats();
   } else showToast('Wrong password');
 }
+
+// ========== ADMIN PRODUCTS ==========
 function renderAdminProducts() {
   const container = document.getElementById('adminProductList');
   container.innerHTML = products.map(p => `
@@ -232,15 +249,86 @@ function clearProductForm() {
   document.getElementById('editProductId').value = '';
   document.getElementById('pImageUpload').value = '';
 }
-function updateAdminStats() {
-  document.getElementById('totalProducts').innerText = products.length;
+
+// ========== ADMIN ORDERS ==========
+function renderAdminOrders() {
+  const container = document.getElementById('adminOrderList');
   let orders = JSON.parse(localStorage.getItem('deserve_orders') || '[]');
-  document.getElementById('totalOrders').innerText = orders.length;
-  let rev = orders.reduce((s,o) => s + (o.total || 0), 0);
-  document.getElementById('totalRevenue').innerText = `R${rev.toLocaleString()}`;
+  if(orders.length === 0) {
+    container.innerHTML = '<p style="color:var(--gray);">No orders yet.</p>';
+    return;
+  }
+  // Sort by date descending (newest first)
+  orders.sort((a,b) => new Date(b.date) - new Date(a.date));
+  container.innerHTML = orders.map((o, idx) => `
+    <div class="order-card">
+      <div class="order-header">
+        <span class="order-customer">👤 ${o.customer}</span>
+        <span class="order-date">${new Date(o.date).toLocaleString()}</span>
+        <span class="order-status status-${o.status.toLowerCase()}">${o.status}</span>
+      </div>
+      <div class="order-details">
+        <span>📧 ${o.email}</span>
+        <span>📱 ${o.phone}</span>
+        <span style="grid-column:1/-1;">📍 ${o.address}</span>
+      </div>
+      <div class="order-items">
+        <ul>${o.items.map(i => `<li><span>${i.emoji || '👕'} ${i.name} × ${i.qty}</span><span>R${(i.price * i.qty).toLocaleString()}</span></li>`).join('')}</ul>
+        <div class="order-total">Total: R${o.total.toLocaleString()}</div>
+      </div>
+      <div class="order-actions">
+        <select id="statusSelect_${o.id}" onchange="updateOrderStatus(${o.id}, this.value)">
+          <option value="Pending" ${o.status==='Pending'?'selected':''}>Pending</option>
+          <option value="Processing" ${o.status==='Processing'?'selected':''}>Processing</option>
+          <option value="Shipped" ${o.status==='Shipped'?'selected':''}>Shipped</option>
+          <option value="Delivered" ${o.status==='Delivered'?'selected':''}>Delivered</option>
+        </select>
+        <button onclick="updateOrderStatus(${o.id}, document.getElementById('statusSelect_${o.id}').value)">Update Status</button>
+        <button style="background:var(--lime); color:black;" onclick="markDelivered(${o.id})">✅ Mark Delivered</button>
+      </div>
+    </div>
+  `).join('');
 }
 
-// ========== QUICK VIEW ==========
+function updateOrderStatus(orderId, newStatus) {
+  let orders = JSON.parse(localStorage.getItem('deserve_orders') || '[]');
+  let order = orders.find(o => o.id == orderId);
+  if(order) {
+    order.status = newStatus;
+    localStorage.setItem('deserve_orders', JSON.stringify(orders));
+    renderAdminOrders();
+    updateAdminStats();
+    showToast(`Order #${orderId} status updated to ${newStatus}`);
+  }
+}
+
+function markDelivered(orderId) {
+  updateOrderStatus(orderId, 'Delivered');
+}
+
+// ========== ADMIN TABS ==========
+function switchAdminTab(tab) {
+  adminTab = tab;
+  document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.admin-tab[onclick*="${tab}"]`)?.classList.add('active');
+  document.getElementById('adminProductsTab').style.display = tab === 'products' ? 'block' : 'none';
+  document.getElementById('adminOrdersTab').style.display = tab === 'orders' ? 'block' : 'none';
+  if(tab === 'orders') renderAdminOrders();
+  if(tab === 'products') renderAdminProducts();
+}
+
+// ========== STATS ==========
+function updateAdminStats() {
+  let orders = JSON.parse(localStorage.getItem('deserve_orders') || '[]');
+  document.getElementById('totalProducts').innerText = products.length;
+  document.getElementById('totalOrders').innerText = orders.length;
+  let revenue = orders.reduce((s,o) => s + (o.total || 0), 0);
+  document.getElementById('totalRevenue').innerText = `R${revenue.toLocaleString()}`;
+  let pending = orders.filter(o => o.status === 'Pending').length;
+  document.getElementById('pendingOrders').innerText = pending;
+}
+
+// ========== QUICK VIEW & CONTACT (unchanged) ==========
 function openQuickView(id) {
   let p = products.find(p => p.id === id);
   if(p) {
@@ -262,7 +350,6 @@ function scrollToSection(id) { document.getElementById(id).scrollIntoView({ beha
 // ========== INIT ==========
 window.addEventListener('DOMContentLoaded', () => {
   updateCartCount(); renderFeatured(); renderShop(); renderCheckout();
-  // If URL has ?admin, also show admin page
   if(window.location.search.includes('admin')) {
     showPage('admin');
   }
@@ -272,10 +359,12 @@ window.addEventListener('DOMContentLoaded', () => {
     else nav.classList.remove('scrolled');
   });
 });
-// expose globals
+
+// Expose globals
 window.showPage = showPage; window.filterProducts = filterProducts; window.sortProducts = sortProducts;
 window.handleSearch = handleSearch; window.addToCart = addToCart; window.openQuickView = openQuickView;
 window.closeQuickView = closeQuickView; window.adminLogin = adminLogin; window.saveProduct = saveProduct;
 window.clearProductForm = clearProductForm; window.editProduct = editProduct; window.deleteProduct = deleteProduct;
 window.toggleMenu = toggleMenu; window.scrollToSection = scrollToSection; window.removeFromCart = removeFromCart;
-window.updateQty = updateQty; window.placeOrder = placeOrder; window.closeModal = closeModal; window.sendContact = sendContact; 
+window.updateQty = updateQty; window.placeOrder = placeOrder; window.closeModal = closeModal; window.sendContact = sendContact;
+window.switchAdminTab = switchAdminTab; window.updateOrderStatus = updateOrderStatus; window.markDelivered = markDelivered;
